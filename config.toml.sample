@@ -1,0 +1,17 @@
+[main]
+space_id = "!xxx:xxx"
+most_common_servers = 3
+min_users_per_server = 2
+additional_servers = ["my.favorite.server"]
+optimal_via_servers = 3
+ignore_errors = true
+ignore_requirementrs_to_reach_optimum = true
+shuffle_order = true
+dry_run = true
+
+# Optional, will be filled in on first run
+[credentials]
+homeserver = ""
+user_id = ""
+device_id = ""
+access_token = ""

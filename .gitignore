@@ -178,3 +178,4 @@ cython_debug/
 # Matrix space via updater
 credentials.json
 config.json
+config.toml

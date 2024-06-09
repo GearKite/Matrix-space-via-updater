@@ -1,35 +1,34 @@
 import asyncio
 import getpass
-import json
-import os
-import sys
-from collections import Counter
 import random
-import time
+import sys
+import tomllib
+from collections import Counter
 
-import aiofiles
+import tomli_w
 from nio import (
     AsyncClient,
-    LoginResponse,
-    SpaceGetHierarchyResponse,
     JoinedMembersResponse,
-    RoomPutStateResponse
+    LoginResponse,
+    RoomPutStateResponse,
+    SpaceGetHierarchyResponse,
 )
 
-CREDENTIALS_FILE = "credentials.json"
-CONFIG_FILE = "config.json"
+CONFIG_FILE = "config.toml"
+
+with open(CONFIG_FILE, "rb") as f:
+    config_toml = tomllib.load(f)
 
 
 async def update_via(client: AsyncClient):
-    # Load config
-    with open(CONFIG_FILE, "r") as f:
-        config = json.load(f)
+    config = config_toml["main"]
 
     space_id = config["space_id"]
 
     # Get all rooms
     rooms_resp = await client.space_get_hierarchy(space_id=space_id)
-    assert isinstance(rooms_resp, SpaceGetHierarchyResponse)
+    if not isinstance(rooms_resp, SpaceGetHierarchyResponse):
+        raise ErrorGettingSpace(rooms_resp)
     rooms = rooms_resp.rooms
 
     # Use only root space
@@ -49,7 +48,7 @@ async def update_via(client: AsyncClient):
         members_resp = await client.joined_members(room_id)
         if not isinstance(members_resp, JoinedMembersResponse):
             if config["ignore_errors"]:
-                print(f"Skpping room {room_id}: {members_resp}")
+                print(f"Skipping room {room_id}: {members_resp}")
             else:
                 raise members_resp
             continue
@@ -124,13 +123,14 @@ async def update_via(client: AsyncClient):
                 print(f"Updated room {room_id}")
             else:
                 if config["ignore_errors"]:
-                    print(f"Cound not update room {room_id}, skipping: {resp}")
+                    print(f"Could not update room {room_id}, skipping: {resp}")
                 else:
                     raise ErrorUpdatingState(resp)
         else:
             print(f"DRY RUN: Would have updated room {room_id}")
         print(f"Before: {', '.join(room["content"]["via"])}")
         print(f"After: {', '.join(servers)}")
+
 
 def get_highest_level_members(member_levels, threshold=50):
     highest_value = max(member_levels.values())
@@ -168,41 +168,40 @@ def write_details_to_disk(resp: LoginResponse, homeserver) -> None:
         homeserver -- URL of homeserver, e.g. "https://matrix.example.org"
     """
 
-    # open the config file in write-mode
-    with open(CREDENTIALS_FILE, "w", encoding="utf-8") as f:
-        # write the login details to disk
-        json.dump(
-            {
-                "homeserver": homeserver,  # e.g. "https://matrix.example.org"
-                "user_id": resp.user_id,  # e.g. "@user:example.org"
-                "device_id": resp.device_id,  # device ID, 10 uppercase letters
-                "access_token": resp.access_token,  # cryptogr. access token
-            },
-            f,
-        )
+    config_toml["credentials"] = {
+        "homeserver": homeserver,  # e.g. "https://matrix.example.org"
+        "user_id": resp.user_id,  # e.g. "@user:example.org"
+        "device_id": resp.device_id,  # device ID, 10 uppercase letters
+        "access_token": resp.access_token,  # cryptogr. access token
+    }
+
+    with open(CONFIG_FILE, "r+b") as fp:
+        tomli_w.dump(config_toml, fp)
 
 
 async def main() -> None:
-    # If there are no previously-saved credentials, we'll use the password
-
-    if not os.path.exists(CREDENTIALS_FILE):
+    # check if 'credentials' exists in the config file and all fields are non-empty
+    if (not "credentials" in config_toml
+        or any([not option for option in config_toml["credentials"].values()])):
 
         print(
-            "First time use. Did not find credential file. Asking for "
+            "First time use. Did not find credential information. Asking for "
             "homeserver, user, and password to create credential file."
         )
 
         homeserver = "https://matrix.example.org"
-        homeserver = input(f"Enter your homeserver URL: [{homeserver}] ")
+        homeserver = input(f"Enter your homeserver URL: [{homeserver}] ") or homeserver
 
         if not (homeserver.startswith("https://") or homeserver.startswith("http://")):
             homeserver = "https://" + homeserver
 
         user_id = "@user:example.org"
-        user_id = input(f"Enter your full user ID: [{user_id}] ")
+        user_id = input(f"Enter your full user ID: [{user_id}] ") or user_id
 
         device_name = "matrix-nio"
-        device_name = input(f"Choose a name for this device: [{device_name}] ")
+        device_name = (
+            input(f"Choose a name for this device: [{device_name}] ") or device_name
+        )
 
         client = AsyncClient(homeserver, user_id)
         pw = getpass.getpass()
@@ -220,17 +219,12 @@ async def main() -> None:
             "Logged in using a password. Credentials were stored.",
             "Try running the script again to login with credentials.",
         )
-    # Otherwise the config file exists, so we'll use the stored credentials
     else:
-        # open the file in read-only mode
-        async with aiofiles.open(CREDENTIALS_FILE, "r") as f:
-            contents = await f.read()
-
-        config = json.loads(contents)
-        client = AsyncClient(config["homeserver"])
-        client.access_token = config["access_token"]
-        client.user_id = config["user_id"]
-        client.device_id = config["device_id"]
+        credentials = config_toml["credentials"]
+        client = AsyncClient(credentials["homeserver"])
+        client.access_token = credentials["access_token"]
+        client.user_id = credentials["user_id"]
+        client.device_id = credentials["device_id"]
 
         print("Logged in using stored credentials.")
 
@@ -242,5 +236,10 @@ async def main() -> None:
 
 class ErrorUpdatingState(Exception):
     pass
+
+
+class ErrorGettingSpace(Exception):
+    pass
+
 
 asyncio.run(main())
